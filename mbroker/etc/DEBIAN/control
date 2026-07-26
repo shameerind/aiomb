@@ -1,0 +1,5 @@
+Package: mrepod
+Version: 1.0
+Architecture: amd64
+Maintainer: Shameer Erakkath <shameer@hpe.com>
+Description: A daemon to handle overlay mounts for monorepo.

@@ -1,0 +1,18 @@
+[Unit]
+Description=Monorepo Mount Broker
+After=network-online.target
+Requires=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/daemon_mrepo
+User=root
+Group=root
+ExecStopPost=/bin/sh -c 'rm -f /run/mrepod_helper/socket /var/run/mrepod.pid'
+Restart=always
+RuntimeDirectory=mrepod_helper
+RestartSec=5s
+
+
+[Install]
+WantedBy=multi-user.target

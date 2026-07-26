@@ -1,0 +1,20 @@
+{
+  "questions": [
+    {
+      "question": "What is mrepod?",
+      "answer": "mrepod is a daemon service that manages overlay filesystem mounts for sandboxes."
+    },
+    {
+      "question": "How do I mount a sandbox?",
+      "answer": "Use the mrepo command: mrepo mount <sandboxname>"
+    },
+    {
+      "question": "What is the default policy?",
+      "answer": "The default policy is 'sbfull'"
+    },
+    {
+      "q": "Where are logs stored?",
+      "a": "Logs are stored in /var/log/mrepod.log"
+    }
+  ]
+}
