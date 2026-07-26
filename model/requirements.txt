@@ -1,0 +1,5 @@
+# AI-OMB Model Requirements
+torch>=1.10
+tensorflow>=2.10
+numpy>=1.21
+scikit-learn>=1.0

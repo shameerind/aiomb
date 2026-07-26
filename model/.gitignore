@@ -1,0 +1,22 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Model weights (tracked separately or via Git LFS)
+*.pt
+*.h5
+*.pb
+*.onnx
+
+# Threshold files generated during training
+vae_threshold.txt
+
+# IDE
+.idea/
+.vscode/
+
+# Virtual environments
+.venv/
+venv/
+env/

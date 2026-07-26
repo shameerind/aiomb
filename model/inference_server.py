@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""
-AI-OMB Model Inference Sidecar Server
+"""AI-OMB Model Inference Sidecar Server.
 
 A lightweight UNIX-socket server that loads all ML models and serves
 inference requests from the mrepod daemon. The daemon sends JSON requests
 and receives JSON responses over /run/mrepod/model.sock.
 
 Protocol:
-  - Client sends a 4-byte big-endian length prefix followed by JSON payload.
-  - Server responds with the same framing.
+    Client sends a 4-byte big-endian length prefix followed by JSON payload.
+    Server responds with the same framing.
 
 Commands:
-  select_server   — Select optimal NFS server for a mount request
-  check_anomaly   — Check NFS telemetry for anomalies via VAE
-  predict_load    — Predict future mount load via LSTM-Transformer
-  optimize_policy — Get DQN policy action for lifecycle tuning
-  health          — Check if the inference server is alive
+    select_server   — Select optimal NFS server for a mount request
+    check_anomaly   — Check NFS telemetry for anomalies via VAE
+    predict_load    — Predict future mount load via LSTM-Transformer
+    optimize_policy — Get DQN policy action for lifecycle tuning
+    health          — Check if the inference server is alive
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -63,7 +64,7 @@ class ModelRegistry:
         try:
             import torch
             sys.path.insert(0, self.model_dir)
-            from model import LSTMTransformerForecast
+            from predictor import LSTMTransformerForecast
             m = LSTMTransformerForecast(input_dim=16, num_outputs=20)
             m.load_state_dict(torch.load(weights_path, map_location="cpu", weights_only=True))
             m.eval()
@@ -272,18 +273,11 @@ def handle_optimize_policy(registry, params):
     q_vals = registry.dqn(state).numpy()[0]
     action = int(np.argmax(q_vals))
 
-    ACTION_NAMES = [
-        "increase_gc_threshold", "decrease_gc_threshold",
-        "increase_quota", "decrease_quota",
-        "increase_pool_size", "decrease_pool_size",
-        "increase_retry_backoff", "decrease_retry_backoff",
-        "enable_prefetch", "disable_prefetch",
-        "force_gc_now", "noop",
-    ]
+    from config import DQN_ACTION_NAMES
 
     return {
         "action": action,
-        "action_name": ACTION_NAMES[action] if action < len(ACTION_NAMES) else "unknown",
+        "action_name": DQN_ACTION_NAMES[action] if action < len(DQN_ACTION_NAMES) else "unknown",
         "q_values": q_vals.tolist(),
     }
 

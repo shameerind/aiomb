@@ -1,161 +1,154 @@
-import numpy as np
+"""Deep Q-Network for mount lifecycle policy optimization.
+
+Dynamically tunes garbage collection thresholds, storage quotas,
+NFS connection pool sizes, and retry backoff parameters using
+reinforcement learning with prioritized experience replay.
+
+State:  18-dimensional vector (mount counts, storage, queue, latency, health).
+Action: 12 discrete actions (adjust GC/quota/pool/backoff, prefetch, noop).
+Reward: Weighted latency + failure rate + storage efficiency + stale ratio.
+"""
+
+from __future__ import annotations
+
 import random
-from collections import deque
+from typing import Tuple
+
+import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
+from model.config import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_GAMMA,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_TARGET_UPDATE_FREQ,
+    DQN_ACTION_NAMES,
+    DQN_N_ACTIONS,
+    DQN_REWARD_WEIGHTS,
+    DQN_STATE_DIM,
+)
+from model.replay_buffer import PrioritizedReplayBuffer
 
-# ============================================================
-#  Environment Stub (replace with real AI‑OMB lifecycle logic)
-# ============================================================
+
+# ─── Environment ──────────────────────────────────────────────────────────────
+
 
 class MountLifecycleEnv:
-    """
-    State dim = 18 (as in the paper)
-    Action space = 12 discrete actions
-    Replace step() with real GC/quota/backoff/pool-size logic
-    """
-    def __init__(self):
-        self.state_dim = 18
-        self.n_actions = 12
-        self.reset()
+    """Simulated environment for mount lifecycle policy optimization.
 
-    def reset(self):
+    Produces synthetic rewards based on random metrics. Replace `step()`
+    with real system telemetry integration for production use.
+
+    Attributes:
+        state_dim: Observation space dimensionality (18).
+        n_actions: Number of discrete actions (12).
+    """
+
+    state_dim: int = DQN_STATE_DIM
+    n_actions: int = DQN_N_ACTIONS
+
+    def __init__(self) -> None:
         self.state = np.zeros(self.state_dim, dtype=np.float32)
-        return self.state
 
-    def step(self, action):
-        # TODO: Replace with real system metrics
+    def reset(self) -> np.ndarray:
+        """Reset environment to initial state."""
+        self.state = np.zeros(self.state_dim, dtype=np.float32)
+        return self.state.copy()
+
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, dict]:
+        """Execute action and return (next_state, reward, done, info).
+
+        TODO: Replace with real system metrics in production.
+        """
         next_state = np.random.randn(self.state_dim).astype(np.float32) * 0.1
 
-        lat_norm = np.clip(np.random.rand(), 0, 1)
-        fail_rate = np.clip(np.random.rand(), 0, 1)
-        stor_eff = np.clip(np.random.rand(), 0, 1)
-        stale_ratio = np.clip(np.random.rand(), 0, 1)
-
+        w = DQN_REWARD_WEIGHTS
         reward = (
-            0.3 * (1 - lat_norm)
-            + 0.25 * (1 - fail_rate)
-            + 0.25 * stor_eff
-            + 0.2 * (1 - stale_ratio)
+            w["latency"] * (1.0 - np.clip(np.random.rand(), 0, 1))
+            + w["failure_rate"] * (1.0 - np.clip(np.random.rand(), 0, 1))
+            + w["storage_efficiency"] * np.clip(np.random.rand(), 0, 1)
+            + w["stale_ratio"] * (1.0 - np.clip(np.random.rand(), 0, 1))
         )
 
-        done = False
         self.state = next_state
-        return next_state, reward, done, {}
+        return next_state, reward, False, {}
 
 
-# ============================================================
-#  DQN Network
-# ============================================================
+# ─── DQN Network ─────────────────────────────────────────────────────────────
+
 
 class DQN(keras.Model):
-    def __init__(self, state_dim=18, n_actions=12):
+    """Deep Q-Network with 3 hidden layers.
+
+    Args:
+        state_dim: Input observation dimensionality.
+        n_actions: Number of discrete output actions.
+    """
+
+    def __init__(self, state_dim: int = DQN_STATE_DIM, n_actions: int = DQN_N_ACTIONS) -> None:
         super().__init__()
-        self.d1 = layers.Dense(128, activation="relu")
-        self.d2 = layers.Dense(64, activation="relu")
-        self.d3 = layers.Dense(32, activation="relu")
-        self.out = layers.Dense(n_actions, activation=None)
+        self.dense1 = layers.Dense(128, activation="relu")
+        self.dense2 = layers.Dense(64, activation="relu")
+        self.dense3 = layers.Dense(32, activation="relu")
+        self.q_out = layers.Dense(n_actions)
 
-    def call(self, inputs):
-        x = self.d1(inputs)
-        x = self.d2(x)
-        x = self.d3(x)
-        return self.out(x)
-
-
-# ============================================================
-#  Prioritized Replay Buffer
-# ============================================================
-
-class PrioritizedReplayBuffer:
-    def __init__(self, capacity=50000, alpha=0.6):
-        self.capacity = capacity
-        self.alpha = alpha
-        self.buffer = []
-        self.pos = 0
-        self.priorities = np.zeros((capacity,), dtype=np.float32)
-
-    def push(self, transition, priority=1.0):
-        max_prio = self.priorities.max() if self.buffer else 1.0
-
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(transition)
-        else:
-            self.buffer[self.pos] = transition
-
-        self.priorities[self.pos] = max(max_prio, priority)
-        self.pos = (self.pos + 1) % self.capacity
-
-    def sample(self, batch_size, beta=0.4):
-        if len(self.buffer) == self.capacity:
-            prios = self.priorities
-        else:
-            prios = self.priorities[:self.pos]
-
-        probs = prios ** self.alpha
-        probs /= probs.sum()
-
-        indices = np.random.choice(len(self.buffer), batch_size, p=probs)
-        samples = [self.buffer[idx] for idx in indices]
-
-        total = len(self.buffer)
-        weights = (total * probs[indices]) ** (-beta)
-        weights /= weights.max()
-        weights = weights.astype(np.float32)
-
-        states, actions, rewards, next_states, dones = zip(*samples)
-
-        return (
-            np.stack(states).astype(np.float32),
-            np.array(actions, dtype=np.int32),
-            np.array(rewards, dtype=np.float32),
-            np.stack(next_states).astype(np.float32),
-            np.array(dones, dtype=np.float32),
-            indices,
-            weights,
-        )
-
-    def update_priorities(self, indices, priorities):
-        for idx, prio in zip(indices, priorities):
-            self.priorities[idx] = prio
-
-    def __len__(self):
-        return len(self.buffer)
+    def call(self, inputs: tf.Tensor) -> tf.Tensor:
+        """Compute Q-values for all actions given state batch."""
+        x = self.dense1(inputs)
+        x = self.dense2(x)
+        x = self.dense3(x)
+        return self.q_out(x)
 
 
-# ============================================================
-#  DQN Training Loop
-# ============================================================
+# ─── Training ────────────────────────────────────────────────────────────────
+
 
 def train_dqn(
-    env,
-    episodes=1000,
-    batch_size=64,
-    gamma=0.99,
-    lr=1e-3,
-    target_update=500,
-):
-    state_dim = env.state_dim
-    n_actions = env.n_actions
+    env: MountLifecycleEnv,
+    episodes: int = 1000,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    gamma: float = DEFAULT_GAMMA,
+    lr: float = DEFAULT_LEARNING_RATE,
+    target_update: int = DEFAULT_TARGET_UPDATE_FREQ,
+    epsilon_start: float = 1.0,
+    epsilon_end: float = 0.05,
+    epsilon_decay_steps: int = 864,
+    verbose: bool = True,
+) -> Tuple[DQN, DQN]:
+    """Train a DQN policy with prioritized experience replay.
 
-    policy_net = DQN(state_dim, n_actions)
-    target_net = DQN(state_dim, n_actions)
+    Args:
+        env: MountLifecycleEnv instance.
+        episodes: Number of training episodes.
+        batch_size: Mini-batch size for replay sampling.
+        gamma: Discount factor.
+        lr: Learning rate.
+        target_update: Steps between target network syncs.
+        epsilon_start: Initial exploration rate.
+        epsilon_end: Final exploration rate.
+        epsilon_decay_steps: Steps to linearly decay epsilon.
+        verbose: Whether to print episode rewards.
 
-    # Build networks
-    dummy = np.zeros((1, state_dim), dtype=np.float32)
+    Returns:
+        Tuple of (policy_net, target_net).
+    """
+    policy_net = DQN(env.state_dim, env.n_actions)
+    target_net = DQN(env.state_dim, env.n_actions)
+
+    # Initialize network weights
+    dummy = np.zeros((1, env.state_dim), dtype=np.float32)
     policy_net(dummy)
     target_net(dummy)
     target_net.set_weights(policy_net.get_weights())
 
     optimizer = keras.optimizers.Adam(learning_rate=lr)
-    buffer = PrioritizedReplayBuffer(capacity=50000, alpha=0.6)
+    buffer = PrioritizedReplayBuffer(capacity=50_000, alpha=0.6)
 
-    epsilon_start, epsilon_end, epsilon_decay_steps = 1.0, 0.05, 72 * 12
     step_count = 0
 
-    def epsilon_by_step(step):
+    def get_epsilon(step: int) -> float:
         frac = min(1.0, step / epsilon_decay_steps)
         return epsilon_start + frac * (epsilon_end - epsilon_start)
 
@@ -166,10 +159,11 @@ def train_dqn(
 
         while not done:
             step_count += 1
-            eps = epsilon_by_step(step_count)
+            eps = get_epsilon(step_count)
 
+            # ε-greedy action selection
             if random.random() < eps:
-                action = random.randrange(n_actions)
+                action = random.randrange(env.n_actions)
             else:
                 q_vals = policy_net(state.reshape(1, -1)).numpy()[0]
                 action = int(np.argmax(q_vals))
@@ -180,49 +174,57 @@ def train_dqn(
             buffer.push((state, action, reward, next_state, done))
             state = next_state
 
+            # Train on mini-batch
             if len(buffer) >= batch_size:
-                (
-                    states,
-                    actions,
-                    rewards,
-                    next_states,
-                    dones,
-                    indices,
-                    weights,
-                ) = buffer.sample(batch_size, beta=0.4)
+                states, actions, rewards, next_states, dones, indices, weights = (
+                    buffer.sample(batch_size, beta=0.4)
+                )
 
                 with tf.GradientTape() as tape:
-                    q_values = policy_net(states)
                     q_values = tf.reduce_sum(
-                        q_values * tf.one_hot(actions, n_actions), axis=1
+                        policy_net(states) * tf.one_hot(actions, env.n_actions),
+                        axis=1,
                     )
-
-                    next_q_values = target_net(next_states)
-                    next_q_max = tf.reduce_max(next_q_values, axis=1)
-                    target = rewards + gamma * next_q_max * (1.0 - dones)
-
-                    td_errors = target - q_values
+                    next_q_max = tf.reduce_max(target_net(next_states), axis=1)
+                    targets = rewards + gamma * next_q_max * (1.0 - dones)
+                    td_errors = targets - q_values
                     loss = tf.reduce_mean(weights * tf.square(td_errors))
 
                 grads = tape.gradient(loss, policy_net.trainable_variables)
                 optimizer.apply_gradients(zip(grads, policy_net.trainable_variables))
 
-                new_prios = np.abs(td_errors.numpy()) + 1e-6
-                buffer.update_priorities(indices, new_prios)
+                buffer.update_priorities(indices, np.abs(td_errors.numpy()) + 1e-6)
 
+            # Sync target network
             if step_count % target_update == 0:
                 target_net.set_weights(policy_net.get_weights())
 
-        print(f"Episode {ep+1}: reward={ep_reward:.4f}")
+        if verbose:
+            print(f"Episode {ep + 1}/{episodes} | Reward: {ep_reward:.4f} | ε: {get_epsilon(step_count):.3f}")
 
     return policy_net, target_net
 
 
-# ============================================================
-#  Action Selection for Production
-# ============================================================
+# ─── Inference ────────────────────────────────────────────────────────────────
 
-def select_action(policy_net, state):
+
+def select_action(policy_net: DQN, state: np.ndarray) -> int:
+    """Select the greedy action for a given state.
+
+    Args:
+        policy_net: Trained DQN policy network.
+        state: State vector of shape (state_dim,).
+
+    Returns:
+        Action index with highest Q-value.
+    """
     q_vals = policy_net(state.reshape(1, -1)).numpy()[0]
     return int(np.argmax(q_vals))
+
+
+def get_action_name(action: int) -> str:
+    """Get human-readable name for an action index."""
+    if 0 <= action < len(DQN_ACTION_NAMES):
+        return DQN_ACTION_NAMES[action]
+    return "unknown"
 

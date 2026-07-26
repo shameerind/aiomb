@@ -1,53 +1,67 @@
-from server_selector import NFSServerEnv, train_server_selector, select_server, VAEHealthScorer
+"""Train and test the NFS server selector DQN.
+
+Usage:
+    python -m model.run_server_selector
+    python model/run_server_selector.py
+"""
+
+from __future__ import annotations
+
 import numpy as np
 
-# -------------------------------------------------------
-# 1. Train the server selector with simulated environment
-# -------------------------------------------------------
-env = NFSServerEnv(num_servers=8, num_policies=6)
+from model.config import SELECTOR_NUM_POLICIES, SELECTOR_NUM_SERVERS, SELECTOR_WEIGHTS_FILE
+from model.server_selector import NFSServerEnv, train_server_selector
 
-print("Training NFS Server Selector...")
-print(f"  Servers: {env.num_servers}")
-print(f"  Policies: {env.num_policies}")
-print(f"  State dim: {env.state_dim}")
-print(f"  Action space: {env.n_actions} (one per server)")
-print()
 
-policy_net, target_net = train_server_selector(
-    env,
-    episodes=500,       # increase for production
-    steps_per_episode=100,
-    batch_size=64,
-    gamma=0.99,
-    lr=1e-3,
-)
+def main() -> None:
+    env = NFSServerEnv(num_servers=SELECTOR_NUM_SERVERS, num_policies=SELECTOR_NUM_POLICIES)
 
-print("\nTraining complete.")
+    print("=" * 60)
+    print("NFS Server Selector — DQN Training")
+    print(f"  Servers:      {env.num_servers}")
+    print(f"  Policies:     {env.num_policies}")
+    print(f"  State dim:    {env.state_dim}")
+    print(f"  Action space: {env.n_actions} (one per server)")
+    print("=" * 60)
 
-# -------------------------------------------------------
-# 2. Test server selection
-# -------------------------------------------------------
-print("\n--- Test: Server Selection ---")
+    policy_net, target_net = train_server_selector(
+        env,
+        episodes=500,
+        steps_per_episode=100,
+        batch_size=64,
+        verbose=True,
+    )
 
-# Simulate telemetry from 8 servers (11 dims each)
-server_telemetry = np.random.rand(8, 11).astype(np.float32)
-predicted_load = np.array([0.3, 0.7, 0.2, 0.9, 0.4, 0.1, 0.5, 0.6], dtype=np.float32)
-connections = np.array([20, 45, 10, 80, 30, 5, 35, 50], dtype=np.float32)
-policy_onehot = np.array([0, 0, 1, 0, 0, 0], dtype=np.float32)  # policy index 2
+    # Save weights
+    policy_net.save_weights(SELECTOR_WEIGHTS_FILE)
+    print(f"\nWeights saved to: {SELECTOR_WEIGHTS_FILE}")
 
-# Without VAE (use raw scores for demo)
-conn_norm = connections / connections.max()
-state = np.concatenate([
-    server_telemetry.mean(axis=1) * 0.1,  # placeholder health scores
-    predicted_load,
-    conn_norm,
-    policy_onehot,
-]).astype(np.float32)
+    # ── Test inference ──
+    print("\n--- Test: Server Selection ---")
 
-q_vals = policy_net(state.reshape(1, -1)).numpy()[0]
-best_server = int(np.argmax(q_vals))
+    server_telemetry = np.random.rand(SELECTOR_NUM_SERVERS, 11).astype(np.float32)
+    predicted_load = np.array([0.3, 0.7, 0.2, 0.9, 0.4, 0.1, 0.5, 0.6], dtype=np.float32)
+    connections = np.array([20, 45, 10, 80, 30, 5, 35, 50], dtype=np.float32)
+    policy_onehot = np.zeros(SELECTOR_NUM_POLICIES, dtype=np.float32)
+    policy_onehot[2] = 1.0  # Policy index 2
 
-print(f"Q-values per server: {np.round(q_vals, 3)}")
-print(f"Selected server: {best_server}")
-print(f"  - Predicted load: {predicted_load[best_server]:.2f}")
-print(f"  - Connections: {connections[best_server]:.0f}")
+    # Build state without VAE (placeholder health scores)
+    conn_norm = connections / connections.max()
+    state = np.concatenate([
+        server_telemetry.mean(axis=1) * 0.1,
+        predicted_load,
+        conn_norm,
+        policy_onehot,
+    ]).astype(np.float32)
+
+    q_vals = policy_net(state.reshape(1, -1)).numpy()[0]
+    best_server = int(np.argmax(q_vals))
+
+    print(f"Q-values: {np.round(q_vals, 3)}")
+    print(f"Selected: server {best_server}")
+    print(f"  Load:        {predicted_load[best_server]:.2f}")
+    print(f"  Connections: {connections[best_server]:.0f}")
+
+
+if __name__ == "__main__":
+    main()
