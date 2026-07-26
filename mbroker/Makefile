@@ -24,7 +24,8 @@ DAEMON_SRCS = \
     daemon/namespace.c daemon/mountinfo.c \
     daemon/locks.c daemon/fault.c daemon/util.c \
     daemon/logger.c daemon/promote.c daemon/ownership.c \
-    daemon/daemon_config.c daemon/monitor.c
+    daemon/daemon_config.c daemon/monitor.c \
+    daemon/model_client.c
 
 CLIENT_SRCS = \
 	client/main.c \

@@ -137,14 +137,43 @@ int config_load(const char *path)
             parse_post_mount_chown_dirs(val);
         } else if (strcmp(key, "post_mount_whiteout_dirs") == 0) {
             parse_post_mount_whiteout_dirs(val);
+        } else if (strcmp(key, "ml_enabled") == 0) {
+            cfg.ml_enabled = atoi(val);
+        } else if (strcmp(key, "model_socket") == 0) {
+            strncpy(cfg.model_socket, val, sizeof(cfg.model_socket) - 1);
+            cfg.model_socket[sizeof(cfg.model_socket) - 1] = '\0';
+        } else if (strcmp(key, "nfs_servers") == 0) {
+            /* Comma-separated list of NFS server hostnames */
+            cfg.nfs_server_count = 0;
+            char sbuf[4096];
+            strncpy(sbuf, val, sizeof(sbuf) - 1);
+            sbuf[sizeof(sbuf) - 1] = '\0';
+            char *sp = NULL;
+            char *stok = strtok_r(sbuf, ",", &sp);
+            while (stok && cfg.nfs_server_count < MAX_NFS_SERVERS) {
+                char *item = strip(stok);
+                if (item[0]) {
+                    strncpy(cfg.nfs_servers[cfg.nfs_server_count], item,
+                            MAX_NFS_SERVER_HOST_LEN - 1);
+                    cfg.nfs_servers[cfg.nfs_server_count][MAX_NFS_SERVER_HOST_LEN - 1] = '\0';
+                    cfg.nfs_server_count++;
+                }
+                stok = strtok_r(NULL, ",", &sp);
+            }
         }
         /* Additional keys can be added here */
     }
 
     fclose(f);
-    log_write("Loaded config from '%s': overlayroot='%s', post_mount_chown_dirs=%d, post_mount_whiteout_dirs=%d\n",
+    /* Defaults for ML config if not set */
+    if (!cfg.model_socket[0])
+        strncpy(cfg.model_socket, "/run/mrepod/model.sock", sizeof(cfg.model_socket) - 1);
+
+    log_write("Loaded config from '%s': overlayroot='%s', post_mount_chown_dirs=%d, "
+              "post_mount_whiteout_dirs=%d, ml_enabled=%d, model_socket='%s', nfs_servers=%d\n",
               path, cfg.overlayroot, cfg.post_mount_chown_dir_count,
-              cfg.post_mount_whiteout_dir_count);
+              cfg.post_mount_whiteout_dir_count, cfg.ml_enabled, cfg.model_socket,
+              cfg.nfs_server_count);
     return 0;
 }
 

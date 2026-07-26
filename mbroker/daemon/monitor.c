@@ -6,6 +6,8 @@
 #include "monitor.h"
 #include "mountinfo.h"
 #include "logger.h"
+#include "daemon_config.h"
+#include "model_client.h"
 
 #define MONITOR_INTERVAL_SEC 600   /* 10 minutes */
 #define OVERLAYFS_SUPER_MAGIC 0x794c7630
@@ -95,6 +97,50 @@ static void run_health_check(void)
 
     log_write("MONITOR: check complete - %d healthy, %d unhealthy "
               "(of %d total)\n", healthy, unhealthy, count);
+
+    /*
+     * ML Integration: If the model sidecar is available and NFS servers
+     * are configured, run anomaly detection on NFS telemetry.
+     *
+     * NOTE: Real telemetry collection (e.g. parsing /proc/self/mountstats)
+     * should replace the placeholder zeros below.
+     */
+    const struct daemon_config *dcfg = config_get();
+    if (dcfg->ml_enabled && dcfg->nfs_server_count > 0) {
+        double nfs_metrics[MODEL_MAX_SERVERS * 11];
+        memset(nfs_metrics, 0, sizeof(nfs_metrics));
+
+        /* TODO: Populate nfs_metrics from /proc/self/mountstats or
+         * a dedicated telemetry collector.  Each server gets 11 floats:
+         *   [resp_time, throughput, error_rate, conn_count, read_ops,
+         *    write_ops, read_bytes, write_bytes, retransmits,
+         *    cache_hit_ratio, queue_depth]
+         */
+
+        struct model_anomaly_result anomaly = {0};
+        int arc = model_check_anomaly(dcfg->model_socket, nfs_metrics,
+                                      dcfg->nfs_server_count, &anomaly);
+        if (arc == 0) {
+            if (anomaly.any_anomalous) {
+                for (int i = 0; i < anomaly.count; i++) {
+                    if (anomaly.servers[i].anomalous) {
+                        log_write("MONITOR: ML anomaly detected on NFS server %d "
+                                  "(error=%.4f threshold=%.4f)\n",
+                                  anomaly.servers[i].server_index,
+                                  anomaly.servers[i].error,
+                                  anomaly.servers[i].threshold);
+                    }
+                }
+            } else {
+                log_write("MONITOR: ML anomaly check passed — "
+                          "all %d NFS server(s) healthy\n",
+                          dcfg->nfs_server_count);
+            }
+        } else {
+            log_write("MONITOR: ML anomaly check unavailable "
+                      "(model server not reachable)\n");
+        }
+    }
 }
 
 static void *monitor_thread(void *arg)

@@ -94,3 +94,71 @@ class NFSVAE(keras.Model):
             "kl_loss": self.kl_loss_tracker.result(),
         }
 
+
+# ============================================================
+#  Helper Functions (used by run_vae.py and inference_server)
+# ============================================================
+
+def train_vae_model(x_train, epochs=20, batch_size=128, learning_rate=1e-3):
+    """Train an NFSVAE model on the given training data.
+
+    Args:
+        x_train: np.ndarray of shape (N, 11)
+        epochs: number of training epochs
+        batch_size: training batch size
+        learning_rate: Adam learning rate
+
+    Returns:
+        Trained NFSVAE model
+    """
+    input_dim = x_train.shape[1] if x_train.ndim > 1 else 11
+    vae = NFSVAE(input_dim=input_dim)
+    vae.compile(optimizer=keras.optimizers.Adam(learning_rate=learning_rate))
+    vae.fit(x_train, epochs=epochs, batch_size=batch_size, verbose=1)
+    return vae
+
+
+def reconstruction_errors(vae, x):
+    """Compute per-sample reconstruction error (sum of squared errors).
+
+    Args:
+        vae: trained NFSVAE model
+        x: np.ndarray of shape (N, input_dim)
+
+    Returns:
+        np.ndarray of shape (N,) — reconstruction error per sample
+    """
+    x_tf = tf.cast(x, tf.float32)
+    x_hat, _, _ = vae(x_tf, training=False)
+    return tf.reduce_sum(tf.square(x_tf - x_hat), axis=1).numpy()
+
+
+def fit_threshold(errors, percentile=99.0):
+    """Compute the anomaly threshold at the given percentile of training errors.
+
+    Args:
+        errors: np.ndarray of shape (N,) — reconstruction errors from training set
+        percentile: percentile cutoff (default 99.0)
+
+    Returns:
+        float — threshold value
+    """
+    import numpy as np
+    return float(np.percentile(errors, percentile))
+
+
+def is_anomalous(vae, sample, threshold):
+    """Check whether a single sample is anomalous.
+
+    Args:
+        vae: trained NFSVAE model
+        sample: np.ndarray of shape (input_dim,)
+        threshold: float — anomaly threshold from fit_threshold()
+
+    Returns:
+        (error, is_anomaly): tuple of (float reconstruction error, bool)
+    """
+    import numpy as np
+    err = reconstruction_errors(vae, sample[np.newaxis])[0]
+    return float(err), bool(err > threshold)
+

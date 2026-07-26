@@ -1,0 +1,19 @@
+[Unit]
+Description=AI-OMB Model Inference Sidecar
+After=network-online.target
+Before=mrepod.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/mrepod/model/inference_server.py --socket /run/mrepod/model.sock --model-dir /opt/mrepod/model
+User=root
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=mrepod
+
+# Resource limits — inference should not starve the daemon
+CPUQuota=50%
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

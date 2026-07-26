@@ -16,6 +16,7 @@
 #include "daemon_config.h"
 #include "post_mount.h"
 #include "umount_ops.h"
+#include "model_client.h"
 #include <dirent.h>
 #include <ctype.h>
 #include <time.h>
@@ -297,6 +298,51 @@ static int handle_custom_lowerdir(const char *custom_lowerdir,
                     goto err_cleanup;
                 }
                 strncpy(hostname, token, sizeof(hostname) - 1);
+
+                /*
+                 * ML Integration: If the daemon has a pool of NFS servers
+                 * and the model sidecar is available, ask it to select the
+                 * optimal server instead of using the hostname from the
+                 * client request verbatim.
+                 */
+                const struct daemon_config *ml_cfg = config_get();
+                if (ml_cfg->ml_enabled && ml_cfg->nfs_server_count > 1) {
+                    double dummy_telemetry[MODEL_MAX_SERVERS * 11];
+                    double dummy_load[MODEL_MAX_SERVERS];
+                    double dummy_conn[MODEL_MAX_SERVERS];
+                    memset(dummy_telemetry, 0, sizeof(dummy_telemetry));
+                    memset(dummy_load, 0, sizeof(dummy_load));
+                    memset(dummy_conn, 0, sizeof(dummy_conn));
+
+                    struct model_server_result sel = {0};
+                    int mrc = model_select_server(
+                        ml_cfg->model_socket,
+                        dummy_telemetry,
+                        dummy_load,
+                        dummy_conn,
+                        0,  /* policy_index */
+                        ml_cfg->nfs_server_count,
+                        6,  /* num_policies */
+                        &sel);
+
+                    if (mrc == 0 && sel.server_index >= 0 &&
+                        sel.server_index < ml_cfg->nfs_server_count) {
+                        log_write("ML server selection: chose server %d ('%s') "
+                                  "over original '%s'\n",
+                                  sel.server_index,
+                                  ml_cfg->nfs_servers[sel.server_index],
+                                  hostname);
+                        strncpy(hostname,
+                                ml_cfg->nfs_servers[sel.server_index],
+                                sizeof(hostname) - 1);
+                        /* Rebuild nfs_source with selected server */
+                        snprintf(nfs_source, sizeof(nfs_source),
+                                 "%s:%s", hostname, nfs_path);
+                    } else {
+                        log_write("ML server selection unavailable (rc=%d); "
+                                  "using original host '%s'\n", mrc, hostname);
+                    }
+                }
 
                 struct hostent *he = gethostbyname(hostname);
                 if (!he) {

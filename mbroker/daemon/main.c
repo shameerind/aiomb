@@ -7,6 +7,7 @@
 #include "mountinfo.h"
 #include "daemon_config.h"
 #include "monitor.h"
+#include "model_client.h"
 #include <sched.h>
 #include <signal.h>
 #include <fcntl.h>
@@ -120,6 +121,23 @@ int main(int argc, char **argv) {
     // Start background health-check monitor thread
     if (monitor_start() < 0) {
         log_write("Warning: failed to start monitor thread\n");
+    }
+
+    // Check ML inference sidecar connectivity
+    {
+        const struct daemon_config *dcfg = config_get();
+        if (dcfg->ml_enabled) {
+            if (model_health_check(dcfg->model_socket) == 0) {
+                log_write("ML inference sidecar is reachable at '%s'\n",
+                          dcfg->model_socket);
+            } else {
+                log_write("Warning: ML inference sidecar not reachable at '%s' — "
+                          "ML features will fall back to defaults\n",
+                          dcfg->model_socket);
+            }
+        } else {
+            log_write("ML integration disabled (ml_enabled=0)\n");
+        }
     }
 
     return broker_run(OVERLAY_SOCKET_FILE);
